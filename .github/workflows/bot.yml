@@ -27,5 +27,5 @@ jobs:
       - name: Botni ishga tushirish
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          ADMIN_ID: ${{ secrets.ADMIN_ID }}
+          ADMIN_ID: 8763042451
         run: python bot.py
