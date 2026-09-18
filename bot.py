@@ -1,11 +1,9 @@
 import os
-import asyncio
-import logging
 import sqlite3
-from datetime import datetime
+import logging
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message,
     CallbackQuery,
@@ -15,365 +13,381 @@ from aiogram.types import (
     PreCheckoutQuery,
 )
 
-# =========================
+# =========================================================
 # SOZLAMALAR
-# =========================
+# =========================================================
 
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-if not TOKEN:
+if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN topilmadi!")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
+logging.basicConfig(level=logging.INFO)
 
-bot = Bot(TOKEN)
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# =========================
-# PREMIUM PAKETLAR
-# =========================
+# =========================================================
+# PAKETLAR
+# =========================================================
 
-PLANS = {
+PACKAGES = {
     "premium_3": {
         "months": 3,
-        "sell_stars": 1500,
-        "cost_stars": 1000,
-        "name": "Telegram Premium — 3 oy",
-        "price_text": "150 000 so'm",
+        "display_price": "110 000 so'm",
+        "customer_stars": 1100,
+        "gift_stars": 1000,
     },
     "premium_6": {
         "months": 6,
-        "sell_stars": 2000,
-        "cost_stars": 1500,
-        "name": "Telegram Premium — 6 oy",
-        "price_text": "200 000 so'm",
+        "display_price": "160 000 so'm",
+        "customer_stars": 1600,
+        "gift_stars": 1500,
     },
     "premium_12": {
         "months": 12,
-        "sell_stars": 2890,
-        "cost_stars": 2500,
-        "name": "Telegram Premium — 12 oy",
-        "price_text": "289 000 so'm",
+        "display_price": "260 000 so'm",
+        "customer_stars": 2600,
+        "gift_stars": 2500,
     },
 }
 
-# =========================
+# =========================================================
 # DATABASE
-# =========================
+# =========================================================
 
-DB_FILE = "orders.db"
+DB_NAME = "payments.db"
 
-db = sqlite3.connect(DB_FILE, check_same_thread=False)
-db.execute("""
-CREATE TABLE IF NOT EXISTS orders (
+db = sqlite3.connect(DB_NAME)
+cursor = db.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS payments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_user_id INTEGER NOT NULL,
-    username TEXT,
-    plan TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    package TEXT NOT NULL,
     months INTEGER NOT NULL,
-    paid_stars INTEGER NOT NULL,
-    telegram_charge_id TEXT UNIQUE,
+    stars INTEGER NOT NULL,
+    charge_id TEXT UNIQUE,
     status TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )
 """)
+
 db.commit()
 
 
-def save_order(
-    user_id: int,
-    username: str | None,
-    plan_key: str,
-    months: int,
-    paid_stars: int,
-    charge_id: str,
-    status: str,
-):
-    db.execute(
-        """
-        INSERT OR IGNORE INTO orders
-        (
-            telegram_user_id,
-            username,
-            plan,
-            months,
-            paid_stars,
-            telegram_charge_id,
-            status,
-            created_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            user_id,
-            username,
-            plan_key,
-            months,
-            paid_stars,
-            charge_id,
-            status,
-            datetime.now().isoformat(),
-        ),
-    )
-    db.commit()
+# =========================================================
+# PAKETLAR KLAVIATURASI
+# =========================================================
 
-
-# =========================
-# MENYU
-# =========================
-
-def premium_keyboard():
+def packages_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="⭐ Premium 3 oy — 150 000 so'm",
-                    callback_data="premium_3",
+                    text="⭐ Premium 3 oy — 110 000 so'm",
+                    callback_data="premium_3"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="⭐ Premium 6 oy — 200 000 so'm",
-                    callback_data="premium_6",
+                    text="⭐ Premium 6 oy — 160 000 so'm",
+                    callback_data="premium_6"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="⭐ Premium 12 oy — 289 000 so'm",
-                    callback_data="premium_12",
+                    text="⭐ Premium 12 oy — 260 000 so'm",
+                    callback_data="premium_12"
                 )
             ],
         ]
     )
 
 
-# =========================
-# /START
-# =========================
+# =========================================================
+# START
+# =========================================================
 
 @dp.message(CommandStart())
 async def start(message: Message):
+
     await message.answer(
         "👋 Assalomu alaykum!\n\n"
         "⭐ Telegram Premium sotib olish uchun paketni tanlang:\n\n"
-        "⭐ 3 oy — 150 000 so'm\n"
-        "⭐ 6 oy — 200 000 so'm\n"
-        "⭐ 12 oy — 289 000 so'm",
-        reply_markup=premium_keyboard(),
+        "⭐ 3 oy — 110 000 so'm\n"
+        "⭐ 6 oy — 160 000 so'm\n"
+        "⭐ 12 oy — 260 000 so'm\n\n"
+        "👇 Paketni tanlang:",
+        reply_markup=packages_keyboard()
     )
 
 
-# =========================
+# =========================================================
 # PAKET TANLASH
-# =========================
+# =========================================================
 
-@dp.callback_query(F.data.in_(PLANS.keys()))
-async def choose_plan(callback: CallbackQuery):
-    plan_key = callback.data
-    plan = PLANS[plan_key]
+@dp.callback_query(F.data.in_(PACKAGES.keys()))
+async def select_package(callback: CallbackQuery):
+
+    package_id = callback.data
+    package = PACKAGES[package_id]
+
+    months = package["months"]
+    stars = package["customer_stars"]
 
     await callback.answer()
 
+    await callback.message.answer(
+        f"⭐ Telegram Premium — {months} oy\n\n"
+        f"💰 Narx: {package['display_price']}\n"
+        f"⭐ To'lov: {stars} Telegram Stars\n\n"
+        f"👇 To'lovni amalga oshiring."
+    )
+
+    # Telegram Stars invoice
     await bot.send_invoice(
         chat_id=callback.from_user.id,
-        title=plan["name"],
+        title=f"Telegram Premium {months} oy",
         description=(
-            f"Telegram Premium {plan['months']} oy.\n"
-            f"Narxi: {plan['price_text']}"
+            f"Telegram Premium {months} oylik obuna."
         ),
-        payload=plan_key,
+        payload=f"premium:{package_id}:{callback.from_user.id}",
         provider_token="",
         currency="XTR",
         prices=[
             LabeledPrice(
-                label=plan["name"],
-                amount=plan["sell_stars"],
+                label=f"Premium {months} oy",
+                amount=stars
             )
         ],
     )
 
 
-# =========================
+# =========================================================
 # PRE-CHECKOUT
-# =========================
+# =========================================================
 
 @dp.pre_checkout_query()
-async def pre_checkout(query: PreCheckoutQuery):
-    plan = PLANS.get(query.invoice_payload)
+async def process_pre_checkout(pre_checkout_query: PreCheckoutQuery):
 
-    if not plan:
-        await query.answer(
+    payload = pre_checkout_query.invoice_payload
+
+    if not payload.startswith("premium:"):
+        await pre_checkout_query.answer(
             ok=False,
             error_message="Buyurtma topilmadi."
         )
         return
 
-    if query.currency != "XTR":
-        await query.answer(
+    parts = payload.split(":")
+
+    if len(parts) != 3:
+        await pre_checkout_query.answer(
             ok=False,
-            error_message="To'lov valyutasi noto'g'ri."
+            error_message="Buyurtma ma'lumotlari noto'g'ri."
         )
         return
 
-    if query.total_amount != plan["sell_stars"]:
-        await query.answer(
+    package_id = parts[1]
+    user_id = int(parts[2])
+
+    if package_id not in PACKAGES:
+        await pre_checkout_query.answer(
+            ok=False,
+            error_message="Paket topilmadi."
+        )
+        return
+
+    # Foydalanuvchi boshqa invoice narxini o'zgartirib yubormasligi uchun
+    expected_stars = PACKAGES[package_id]["customer_stars"]
+
+    if pre_checkout_query.total_amount != expected_stars:
+        await pre_checkout_query.answer(
             ok=False,
             error_message="To'lov summasi noto'g'ri."
         )
         return
 
-    await query.answer(ok=True)
+    if pre_checkout_query.from_user.id != user_id:
+        await pre_checkout_query.answer(
+            ok=False,
+            error_message="Buyurtma foydalanuvchiga mos kelmaydi."
+        )
+        return
+
+    await pre_checkout_query.answer(ok=True)
 
 
-# =========================
-# TO'LOV MUVAFFAQIYATLI
-# =========================
+# =========================================================
+# TO'LOV MUVAFFAQIYATLI BO'LGANDA
+# =========================================================
 
 @dp.message(F.successful_payment)
 async def successful_payment(message: Message):
+
     payment = message.successful_payment
 
-    plan_key = payment.invoice_payload
-    plan = PLANS.get(plan_key)
+    payload = payment.invoice_payload
 
-    if not plan:
-        await message.answer(
-            "⚠️ To'lov qabul qilindi, lekin paket aniqlanmadi.\n"
-            "Admin bilan bog'laning."
-        )
+    if not payload.startswith("premium:"):
         return
 
+    parts = payload.split(":")
+
+    if len(parts) != 3:
+        return
+
+    package_id = parts[1]
+    user_id = int(parts[2])
+
+    if package_id not in PACKAGES:
+        return
+
+    package = PACKAGES[package_id]
+
+    months = package["months"]
+    paid_stars = payment.total_amount
     charge_id = payment.telegram_payment_charge_id
 
-    # Bir xil to'lovni ikkinchi marta qayta ishlamaslik
-    existing = db.execute(
-        """
-        SELECT id FROM orders
-        WHERE telegram_charge_id = ?
-        """,
-        (charge_id,),
-    ).fetchone()
+    # Bir xil to'lovni ikki marta ishlatmaslik
+    cursor.execute(
+        "SELECT id FROM payments WHERE charge_id = ?",
+        (charge_id,)
+    )
+
+    existing = cursor.fetchone()
 
     if existing:
         await message.answer(
-            "ℹ️ Bu to'lov allaqachon qayta ishlangan."
+            "✅ Bu to'lov allaqachon qayta ishlangan."
         )
         return
 
-    user_id = message.from_user.id
-    username = message.from_user.username
-
-    save_order(
-        user_id=user_id,
-        username=username,
-        plan_key=plan_key,
-        months=plan["months"],
-        paid_stars=plan["sell_stars"],
-        charge_id=charge_id,
-        status="PAYMENT_RECEIVED",
+    # Avval to'lovni bazaga yozamiz
+    cursor.execute(
+        """
+        INSERT INTO payments
+        (user_id, package, months, stars, charge_id, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            package_id,
+            months,
+            paid_stars,
+            charge_id,
+            "paid"
+        )
     )
 
+    db.commit()
+
+    # =====================================================
+    # PREMIUM BERISH
+    # =====================================================
+
     try:
-        # Telegram Premium'ni avtomatik yuborish
+
         result = await bot.gift_premium_subscription(
             user_id=user_id,
-            month_count=plan["months"],
-            star_count=plan["cost_stars"],
-            text=f"🎁 Telegram Premium — {plan['months']} oy",
+            month_count=months,
+            star_count=package["gift_stars"],
+            text=f"⭐ {months} oylik Telegram Premium"
         )
 
         if result:
-            db.execute(
+
+            cursor.execute(
                 """
-                UPDATE orders
+                UPDATE payments
                 SET status = ?
-                WHERE telegram_charge_id = ?
+                WHERE charge_id = ?
                 """,
-                ("PREMIUM_SENT", charge_id),
+                ("premium_sent", charge_id)
             )
+
             db.commit()
 
             await message.answer(
-                "✅ To'lov muvaffaqiyatli!\n\n"
-                f"🎁 Telegram Premium {plan['months']} oyga "
-                "avtomatik yuborildi.\n\n"
-                "⭐ Xaridingiz uchun rahmat!"
+                f"✅ To'lov muvaffaqiyatli!\n\n"
+                f"⭐ Telegram Premium {months} oyga yuborildi.\n"
+                f"💳 To'langan: {paid_stars} Stars\n\n"
+                f"Rahmat! 🙏"
             )
 
             # Admin xabari
             if ADMIN_ID:
-                try:
-                    await bot.send_message(
-                        int(ADMIN_ID),
-                        "💰 YANGI BUYURTMA\n\n"
-                        f"👤 User ID: {user_id}\n"
-                        f"👤 Username: @{username or 'yo‘q'}\n"
-                        f"📦 Paket: {plan['months']} oy\n"
-                        f"💳 To'lov: {plan['sell_stars']} ⭐\n"
-                        f"🎁 Xarajat: {plan['cost_stars']} ⭐\n"
-                        "✅ Premium yuborildi."
-                    )
-                except Exception:
-                    logging.exception("Admin xabarini yuborishda xato")
+                await bot.send_message(
+                    ADMIN_ID,
+                    "💰 YANGI TO'LOV\n\n"
+                    f"👤 User ID: {user_id}\n"
+                    f"⭐ Paket: {months} oy\n"
+                    f"💳 To'lov: {paid_stars} Stars\n"
+                    f"🧾 Charge ID: {charge_id}\n"
+                    f"✅ Premium yuborildi."
+                )
 
-        else:
-            raise RuntimeError("Premium yuborish muvaffaqiyatsiz")
+    except Exception as e:
 
-    except Exception:
-        logging.exception("Premium yuborishda xatolik")
+        logging.exception("Premium yuborishda xato")
 
-        db.execute(
+        cursor.execute(
             """
-            UPDATE orders
+            UPDATE payments
             SET status = ?
-            WHERE telegram_charge_id = ?
+            WHERE charge_id = ?
             """,
-            ("PREMIUM_SEND_ERROR", charge_id),
+            ("paid_pending", charge_id)
         )
+
         db.commit()
 
         await message.answer(
             "✅ To'lovingiz qabul qilindi.\n\n"
-            "⏳ Premium yuborishda texnik muammo yuz berdi.\n"
-            "Buyurtmangiz saqlandi va admin tekshiradi."
+            "⚠️ Premium yuborishda texnik xatolik yuz berdi.\n"
+            "Admin tez orada tekshiradi."
         )
 
         if ADMIN_ID:
-            try:
-                await bot.send_message(
-                    int(ADMIN_ID),
-                    "🚨 PREMIUM YUBORISHDA XATO!\n\n"
-                    f"User ID: {user_id}\n"
-                    f"Username: @{username or 'yo‘q'}\n"
-                    f"Paket: {plan['months']} oy\n"
-                    f"To'lov: {plan['sell_stars']} ⭐\n"
-                    f"Charge ID: {charge_id}"
-                )
-            except Exception:
-                logging.exception("Admin xabarini yuborishda xato")
+            await bot.send_message(
+                ADMIN_ID,
+                "🚨 MUAMMO!\n\n"
+                f"👤 User ID: {user_id}\n"
+                f"⭐ Paket: {months} oy\n"
+                f"💳 To'lov: {paid_stars} Stars\n"
+                f"🧾 Charge ID: {charge_id}\n\n"
+                f"❌ Premium yuborilmadi.\n"
+                f"Xato: {e}"
+            )
 
 
-# =========================
-# BOTNI ISHGA TUSHIRISH
-# =========================
+# =========================================================
+# PAYMENT SUPPORT
+# =========================================================
+
+@dp.message(Command("paysupport"))
+async def pay_support(message: Message):
+
+    await message.answer(
+        "💳 To'lov bo'yicha yordam kerak bo'lsa,\n"
+        "admin bilan bog'laning."
+    )
+
+
+# =========================================================
+# ISHGA TUSHIRISH
+# =========================================================
 
 async def main():
-    me = await bot.get_me()
 
-    logging.info(
-        "Bot ishga tushdi: @%s",
-        me.username
-    )
+    print("🤖 Bot ishga tushdi...")
 
-    await dp.start_polling(
-        bot,
-        allowed_updates=dp.resolve_used_update_types()
-    )
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())
